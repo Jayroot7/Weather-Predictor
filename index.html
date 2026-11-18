@@ -452,6 +452,7 @@
 
         <p class="subtitle">
             Import or refresh historical hourly weather data for a location.
+            The import runs in batches automatically until all history is loaded.
         </p>
 
         <form id="weatherImportForm">
@@ -1289,6 +1290,9 @@
 
     /* =========================================================
        WEATHER IMPORT
+       Each load_weather_history call is a separate HTTP request,
+       so the 60s Supabase timeout resets for every batch. The
+       loop reruns until the function reports finished = true.
        ========================================================= */
 
     const weatherImportForm =
@@ -1400,110 +1404,131 @@
             );
 
             try {
-                const { data, error } =
-                    await supabaseClient.rpc(
-                        'load_weather_history',
-                        {
-                            p_location_name:
-                                locationName,
+                const MAX_BATCHES = 20;           // safety cap (1940 -> now is ~9 batches)
+                let batchNumber = 0;
+                let finished = false;
+                let lastLoadedTo = null;
 
-                            p_latitude:
-                                latitude,
+                let totalRows = 0;
+                let totalChunks = 0;
+                let firstLoadedFrom = null;
+                let lastResult = null;
 
-                            p_longitude:
-                                longitude
-                        }
+                importResults.classList.add('visible');
+
+                while (!finished && batchNumber < MAX_BATCHES) {
+                    batchNumber++;
+
+                    importButton.textContent =
+                        `Importing batch ${batchNumber}...`;
+
+                    importResultStatus.textContent =
+                        `Running batch ${batchNumber}...`;
+
+                    // Each call is a separate request, so the 60s timeout resets
+                    const { data, error } =
+                        await supabaseClient.rpc(
+                            'load_weather_history',
+                            {
+                                p_location_name: locationName,
+                                p_latitude: latitude,
+                                p_longitude: longitude
+                            }
+                        );
+
+                    if (error) {
+                        throw error;
+                    }
+
+                    if (!Array.isArray(data) || data.length === 0) {
+                        throw new Error(
+                            'The import completed but returned no result.'
+                        );
+                    }
+
+                    const result = data[0];
+                    lastResult = result;
+
+                    // Show each batch as it completes
+                    const row = document.createElement('tr');
+
+                    addCell(row, result.rows_upserted);
+                    addCell(row, result.chunks_run);
+                    addCell(row, result.loaded_from);
+                    addCell(row, result.loaded_to);
+                    addCell(
+                        row,
+                        result.finished ? 'true' : 'false',
+                        result.finished ? 'status-true' : 'status-false'
                     );
 
-                if (error) {
-                    throw error;
+                    importResultsBody.appendChild(row);
+
+                    totalRows += Number(result.rows_upserted) || 0;
+                    totalChunks += Number(result.chunks_run) || 0;
+
+                    if (firstLoadedFrom === null ||
+                        result.loaded_from < firstLoadedFrom) {
+                        firstLoadedFrom = result.loaded_from;
+                    }
+
+                    finished = result.finished === true;
+
+                    // Guard against an endless loop if progress stalls
+                    if (!finished &&
+                        lastLoadedTo !== null &&
+                        result.loaded_to === lastLoadedTo) {
+                        throw new Error(
+                            'Import stopped making progress. Check the load_weather_history function.'
+                        );
+                    }
+
+                    lastLoadedTo = result.loaded_to;
+
+                    // Keep the ranking dropdown current as data arrives
+                    await loadRankingLocations(locationName);
                 }
 
-                if (
-                    !Array.isArray(data) ||
-                    data.length === 0
-                ) {
-                    throw new Error(
-                        'The import completed but returned no result.'
-                    );
-                }
+                // Totals row
+                const totalRow = document.createElement('tr');
+                totalRow.style.fontWeight = '700';
 
-                data.forEach((result) => {
-                    const row =
-                        document.createElement('tr');
-
-                    addCell(
-                        row,
-                        result.rows_upserted
-                    );
-
-                    addCell(
-                        row,
-                        result.chunks_run
-                    );
-
-                    addCell(
-                        row,
-                        result.loaded_from
-                    );
-
-                    addCell(
-                        row,
-                        result.loaded_to
-                    );
-
-                    addCell(
-                        row,
-                        result.finished
-                            ? 'true'
-                            : 'false',
-
-                        result.finished
-                            ? 'status-true'
-                            : 'status-false'
-                    );
-
-                    importResultsBody.appendChild(
-                        row
-                    );
-                });
-
-                importResults.classList.add(
-                    'visible'
+                addCell(totalRow, totalRows);
+                addCell(totalRow, totalChunks);
+                addCell(totalRow, firstLoadedFrom);
+                addCell(totalRow, lastResult.loaded_to);
+                addCell(
+                    totalRow,
+                    finished ? 'true' : 'false',
+                    finished ? 'status-true' : 'status-false'
                 );
 
-                const result = data[0];
+                importResultsBody.appendChild(totalRow);
 
-                importResultStatus.textContent =
-                    result.finished
-                        ? 'Import is up to date'
-                        : 'Additional history remains';
+                if (finished) {
+                    importResultStatus.textContent =
+                        `Import is up to date (${batchNumber} batch${batchNumber === 1 ? '' : 'es'})`;
 
-                /*
-                 * Refresh the separate ranking
-                 * location dropdown and select the
-                 * imported location.
-                 */
-
-                await loadRankingLocations(
-                    locationName
-                );
-
-                if (result.finished) {
                     showToast(
                         `Weather history for ${locationName} is fully up to date.`,
                         'success'
                     );
                 }
                 else {
+                    importResultStatus.textContent =
+                        'Batch limit reached. Run the import again to continue.';
+
                     showToast(
-                        `Batch completed for ${locationName}. Run the import again to continue.`,
-                        'success'
+                        `Reached ${MAX_BATCHES} batches for ${locationName}. Run the import again to continue.`,
+                        'info'
                     );
                 }
             }
             catch (error) {
                 console.error(error);
+
+                importResultStatus.textContent =
+                    'Import stopped. Run the import again to resume.';
 
                 showToast(
                     getErrorMessage(error),
@@ -2012,137 +2037,32 @@
                     const row =
                         document.createElement('tr');
 
-                    addCell(
-                        row,
-                        result.weather_rank,
-                        'rank-cell'
-                    );
-
-                    addCell(
-                        row,
-                        result.candidate_date
-                    );
-
-                    addCell(
-                        row,
-                        result.day_name
-                    );
-
-                    addCell(
-                        row,
-                        result.overall_weather_score,
-                        'score-cell'
-                    );
-
-                    addCell(
-                        row,
-                        result.dry_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.completely_dry_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.low_cloud_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.half_or_less_cloud_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.warm_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.reaches_max_temp_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.good_weather_probability_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_average_temperature_c
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_maximum_temperature_c
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_minimum_temperature_c
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_precipitation_mm
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_rain_mm
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_cloud_cover_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_relative_humidity_pct
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_average_wind_speed_mph
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_maximum_wind_speed_mph
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_maximum_wind_gust_mph
-                    );
-
-                    addCell(
-                        row,
-                        result.expected_pressure_msl_hpa
-                    );
-
-                    addCell(
-                        row,
-                        result.historical_years
-                    );
-
-                    addCell(
-                        row,
-                        result.historical_days_analysed
-                    );
-
-                    addCell(
-                        row,
-                        result.earliest_historical_date
-                    );
-
-                    addCell(
-                        row,
-                        result.latest_historical_date
-                    );
+                    addCell(row, result.weather_rank, 'rank-cell');
+                    addCell(row, result.candidate_date);
+                    addCell(row, result.day_name);
+                    addCell(row, result.overall_weather_score, 'score-cell');
+                    addCell(row, result.dry_probability_pct);
+                    addCell(row, result.completely_dry_probability_pct);
+                    addCell(row, result.low_cloud_probability_pct);
+                    addCell(row, result.half_or_less_cloud_probability_pct);
+                    addCell(row, result.warm_probability_pct);
+                    addCell(row, result.reaches_max_temp_probability_pct);
+                    addCell(row, result.good_weather_probability_pct);
+                    addCell(row, result.expected_average_temperature_c);
+                    addCell(row, result.expected_maximum_temperature_c);
+                    addCell(row, result.expected_minimum_temperature_c);
+                    addCell(row, result.expected_precipitation_mm);
+                    addCell(row, result.expected_rain_mm);
+                    addCell(row, result.expected_cloud_cover_pct);
+                    addCell(row, result.expected_relative_humidity_pct);
+                    addCell(row, result.expected_average_wind_speed_mph);
+                    addCell(row, result.expected_maximum_wind_speed_mph);
+                    addCell(row, result.expected_maximum_wind_gust_mph);
+                    addCell(row, result.expected_pressure_msl_hpa);
+                    addCell(row, result.historical_years);
+                    addCell(row, result.historical_days_analysed);
+                    addCell(row, result.earliest_historical_date);
+                    addCell(row, result.latest_historical_date);
 
                     rankingResultsBody.appendChild(
                         row
