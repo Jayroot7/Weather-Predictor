@@ -1,0 +1,70 @@
+EXEC dbo.usp_RankCandidateWeatherDates
+
+     /* ---------------------------------------------------------
+        1. WHICH DATES ARE WE COMPARING?
+        --------------------------------------------------------- */
+
+     -- First and last date of the period we're choosing from.
+     -- Here: any day between 1 June and 30 September 2027.
+     @StartDate         = '2027-06-01',
+     @EndDate           = '2027-09-30',
+
+     -- Which day of the week to rank. Only the matching days inside the
+     -- period above are scored (e.g. every Saturday between June and September).
+     -- Use a full name ('Saturday') or a short one ('Sat').
+     -- Leave out (or use NULL) to rank every day in the period.
+     @DayOfWeek         = 'Saturday',
+
+
+     /* ---------------------------------------------------------
+        2. HOW IMPORTANT IS EACH TYPE OF WEATHER?
+        ---------------------------------------------------------
+        The procedure looks at past years of weather around each
+        candidate date (3 days either side by default) and works out the
+        chance of each type of weather. Each chance is a percentage,
+        e.g. "dry on 72% of similar days".
+
+        The weights below say how much each chance counts towards a
+        date's overall score. A bigger weight means that type of
+        weather matters more to you. */
+
+     -- Chance of a dry day (almost no rain).
+     @WeightDry         = 0.6,
+
+     -- Chance of a clear day (little cloud cover).
+     @WeightLowCloud    = 0.1,
+
+     -- Chance of a warm day (average temperature of 15°C or more).
+     @WeightWarm        = 0.3,
+
+     -- Chance of a "good" day: dry AND clear AND warm all at once.
+     -- 0 = ignore it, because the three weights above already cover those things.
+     @WeightGood        = 0,
+
+     -- 1 = rescale the weights so they add up to 1, which makes the
+     --     overall score a clean 0-100 (higher = better weather).
+     -- 0 = use the weights exactly as typed.
+     @NormaliseWeights  = 1,
+
+
+     /* ---------------------------------------------------------
+        3. HOW MUCH DO WE WANT BACK?
+        --------------------------------------------------------- */
+
+     -- Only show the best 5 dates. Leave out (or use NULL) to see every date.
+     @TopN              = 5;
+
+
+/* ---------------------------------------------------------------
+   OPTIONAL SETTINGS (not used above, so the defaults apply).
+   Add any of these to the call above to change them.
+
+   @WindowDays         = 3     -- how many days either side of each date to
+                               --   look at in past years (3 = a 7-day window)
+   @StartHour          = 8     -- ignore weather before this hour of the day
+   @EndHour            = 23    -- ignore weather after this hour of the day
+   @MinHoursRequired   = 12    -- skip past days with fewer readings than this
+   @DryMaxPrecipMm     = 0.20  -- "dry" means no more than this much rain (mm)
+   @LowCloudMaxPct     = 30    -- "clear" means cloud cover of this % or less
+   @WarmMinAvgTempC    = 15    -- "warm" means an average of this many °C or more
+   --------------------------------------------------------------- */
