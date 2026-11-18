@@ -1,0 +1,2194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>Weather Analysis</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        :root {
+            --background: #f4f6f8;
+            --card: #ffffff;
+            --text: #202124;
+            --muted: #667085;
+            --border: #dfe3e8;
+            --header: #f8f9fa;
+            --primary: #3ecf8e;
+            --primary-hover: #35bc80;
+            --primary-text: #063a27;
+            --success: #168653;
+            --warning: #d97706;
+            --danger: #ef4444;
+            --info: #3b82f6;
+        }
+
+        body {
+            margin: 0;
+            background: var(--background);
+            color: var(--text);
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        .container {
+            width: min(1500px, calc(100% - 32px));
+            margin: 40px auto;
+        }
+
+        .page-header {
+            margin-bottom: 24px;
+        }
+
+        .page-header h1 {
+            margin: 0 0 8px;
+            font-size: 28px;
+        }
+
+        .page-header p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .card {
+            margin-bottom: 24px;
+            padding: 26px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        .card h2 {
+            margin: 0 0 6px;
+            font-size: 21px;
+        }
+
+        .subtitle {
+            margin: 0 0 24px;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .divider {
+            height: 1px;
+            margin: 34px 0;
+            background: var(--border);
+        }
+
+        .section-title {
+            margin: 24px 0 12px;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(160px, 1fr));
+            gap: 16px;
+        }
+
+        .four-column-grid {
+            grid-template-columns: repeat(4, minmax(140px, 1fr));
+        }
+
+        .location-grid {
+            grid-template-columns: minmax(240px, 1fr);
+            max-width: 420px;
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        label {
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        input,
+        select {
+            width: 100%;
+            min-height: 42px;
+            padding: 10px 12px;
+            color: var(--text);
+            background: #ffffff;
+            border: 1px solid #d0d5dd;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+        }
+
+        input:focus,
+        select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.14);
+        }
+
+        select:disabled,
+        input:disabled {
+            color: #777;
+            background: #f2f4f7;
+            cursor: not-allowed;
+        }
+
+        .checkbox-row {
+            display: inline-flex;
+            align-items: center;
+            gap: 9px;
+            margin-top: 18px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .checkbox-row input {
+            width: 17px;
+            height: 17px;
+            min-height: auto;
+            margin: 0;
+        }
+
+        .actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 22px;
+        }
+
+        button {
+            min-height: 42px;
+            padding: 10px 19px;
+            color: var(--primary-text);
+            background: var(--primary);
+            border: none;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        button:hover:not(:disabled) {
+            background: var(--primary-hover);
+        }
+
+        button:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
+        .secondary-button {
+            color: #344054;
+            background: #ffffff;
+            border: 1px solid #d0d5dd;
+        }
+
+        .secondary-button:hover:not(:disabled) {
+            background: #f8f9fa;
+        }
+
+        .advanced-settings {
+            margin-top: 24px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .advanced-settings summary {
+            padding: 14px 16px;
+            background: var(--header);
+            font-size: 14px;
+            font-weight: 700;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .advanced-content {
+            padding: 20px 16px;
+        }
+
+        .advanced-content h3 {
+            margin: 0 0 14px;
+            font-size: 15px;
+        }
+
+        .advanced-content h3:not(:first-child) {
+            margin-top: 28px;
+        }
+
+        .results {
+            display: none;
+            margin-top: 30px;
+        }
+
+        .results.visible {
+            display: block;
+        }
+
+        .results-heading {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        .results-heading h3 {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        .result-count {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .table-wrap {
+            width: 100%;
+            overflow: auto;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+        }
+
+        .ranking-table-wrap {
+            max-height: 650px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .ranking-table {
+            min-width: 3150px;
+        }
+
+        th,
+        td {
+            padding: 12px;
+            text-align: left;
+            white-space: nowrap;
+            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        th:last-child,
+        td:last-child {
+            border-right: none;
+        }
+
+        tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: var(--header);
+            font-weight: 700;
+        }
+
+        tbody tr:hover td {
+            background: #f9fafb;
+        }
+
+        .ranking-table tbody tr:first-child td {
+            background: #edfff7;
+        }
+
+        .rank-cell,
+        .score-cell {
+            font-weight: 700;
+        }
+
+        .score-cell {
+            color: #087747;
+        }
+
+        .status-true {
+            color: var(--success);
+            font-weight: 700;
+        }
+
+        .status-false {
+            color: var(--warning);
+            font-weight: 700;
+        }
+
+        .empty-result {
+            padding: 24px;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        #toastContainer {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            width: min(440px, calc(100% - 40px));
+            flex-direction: column;
+            gap: 10px;
+            pointer-events: none;
+        }
+
+        .toast {
+            padding: 14px 16px;
+            color: #ffffff;
+            background: #202124;
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+            line-height: 1.45;
+            animation: slide-in 0.2s ease-out;
+            pointer-events: auto;
+        }
+
+        .toast.success {
+            border-left: 5px solid var(--primary);
+        }
+
+        .toast.error {
+            border-left: 5px solid var(--danger);
+        }
+
+        .toast.info {
+            border-left: 5px solid var(--info);
+        }
+
+        @keyframes slide-in {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @media (max-width: 950px) {
+            .form-grid,
+            .four-column-grid {
+                grid-template-columns: repeat(2, minmax(140px, 1fr));
+            }
+
+            .location-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 580px) {
+            .container {
+                width: min(100% - 20px, 1500px);
+                margin: 20px auto;
+            }
+
+            .card {
+                padding: 18px;
+            }
+
+            .form-grid,
+            .four-column-grid,
+            .location-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .results-heading {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 5px;
+            }
+
+            #toastContainer {
+                top: 10px;
+                right: 10px;
+                width: calc(100% - 20px);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div id="toastContainer" aria-live="polite"></div>
+
+<main class="container">
+
+    <header class="page-header">
+        <h1>Weather Analysis</h1>
+
+        <p>
+            Import historical weather data and rank candidate dates using historical conditions.
+        </p>
+    </header>
+
+    <section class="card">
+
+        <!-- ==================================================
+             WEATHER IMPORT
+             ================================================== -->
+
+        <h2>Weather Import</h2>
+
+        <p class="subtitle">
+            Import or refresh historical hourly weather data for a location.
+        </p>
+
+        <form id="weatherImportForm">
+
+            <div class="form-grid">
+
+                <div class="field">
+                    <label for="importLocationName">
+                        Location Name
+                    </label>
+
+                    <input
+                        id="importLocationName"
+                        type="text"
+                        value="Troon"
+                        maxlength="200"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="latitude">
+                        Latitude
+                    </label>
+
+                    <input
+                        id="latitude"
+                        type="number"
+                        value="55.54"
+                        min="-90"
+                        max="90"
+                        step="any"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="longitude">
+                        Longitude
+                    </label>
+
+                    <input
+                        id="longitude"
+                        type="number"
+                        value="-4.66"
+                        min="-180"
+                        max="180"
+                        step="any"
+                        required
+                    >
+                </div>
+
+            </div>
+
+            <div class="actions">
+
+                <button id="importButton" type="submit">
+                    Import Weather History
+                </button>
+
+            </div>
+
+        </form>
+
+        <div id="importResults" class="results">
+
+            <div class="results-heading">
+
+                <h3>Import Results</h3>
+
+                <span
+                    id="importResultStatus"
+                    class="result-count"
+                ></span>
+
+            </div>
+
+            <div class="table-wrap">
+
+                <table>
+
+                    <thead>
+                        <tr>
+                            <th>Rows Upserted</th>
+                            <th>Chunks Run</th>
+                            <th>Loaded From</th>
+                            <th>Loaded To</th>
+                            <th>Finished</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="importResultsBody"></tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+
+
+        <!-- ==================================================
+             WEATHER RANKING
+             ================================================== -->
+
+        <div class="divider"></div>
+
+        <h2>Rank Candidate Weather Dates</h2>
+
+        <p class="subtitle">
+            Select an imported location and rank candidate dates using its historical weather.
+        </p>
+
+        <form id="rankingForm">
+
+            <!-- Separate ranking location dropdown -->
+
+            <div class="form-grid location-grid">
+
+                <div class="field">
+                    <label for="rankLocationName">
+                        Location
+                    </label>
+
+                    <select
+                        id="rankLocationName"
+                        required
+                    >
+                        <option value="">
+                            Loading locations...
+                        </option>
+                    </select>
+                </div>
+
+            </div>
+
+
+            <!-- Main ranking fields -->
+
+            <div
+                class="form-grid four-column-grid"
+                style="margin-top: 18px;"
+            >
+
+                <div class="field">
+                    <label for="rankStartDate">
+                        Start Date
+                    </label>
+
+                    <input
+                        id="rankStartDate"
+                        type="date"
+                        value="2027-06-01"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="rankEndDate">
+                        End Date
+                    </label>
+
+                    <input
+                        id="rankEndDate"
+                        type="date"
+                        value="2027-09-30"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="rankDayOfWeek">
+                        Day of Week
+                    </label>
+
+                    <select id="rankDayOfWeek">
+                        <option value="">Every day</option>
+                        <option value="Monday">Monday</option>
+                        <option value="Tuesday">Tuesday</option>
+                        <option value="Wednesday">Wednesday</option>
+                        <option value="Thursday">Thursday</option>
+                        <option value="Friday">Friday</option>
+
+                        <option
+                            value="Saturday"
+                            selected
+                        >
+                            Saturday
+                        </option>
+
+                        <option value="Sunday">Sunday</option>
+                    </select>
+                </div>
+
+                <div class="field">
+                    <label for="rankTopN">
+                        Number of Results
+                    </label>
+
+                    <input
+                        id="rankTopN"
+                        type="number"
+                        value="5"
+                        min="1"
+                        max="500"
+                        step="1"
+                    >
+                </div>
+
+            </div>
+
+
+            <!-- Score weights -->
+
+            <div class="section-title">
+                Score Weights
+            </div>
+
+            <div class="form-grid four-column-grid">
+
+                <div class="field">
+                    <label for="weightDry">
+                        Dry
+                    </label>
+
+                    <input
+                        id="weightDry"
+                        type="number"
+                        value="0.6"
+                        min="0"
+                        step="0.01"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="weightLowCloud">
+                        Low Cloud
+                    </label>
+
+                    <input
+                        id="weightLowCloud"
+                        type="number"
+                        value="0.1"
+                        min="0"
+                        step="0.01"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="weightWarm">
+                        Warm
+                    </label>
+
+                    <input
+                        id="weightWarm"
+                        type="number"
+                        value="0.3"
+                        min="0"
+                        step="0.01"
+                        required
+                    >
+                </div>
+
+                <div class="field">
+                    <label for="weightGood">
+                        Good Weather
+                    </label>
+
+                    <input
+                        id="weightGood"
+                        type="number"
+                        value="0"
+                        min="0"
+                        step="0.01"
+                        required
+                    >
+                </div>
+
+            </div>
+
+            <label class="checkbox-row">
+
+                <input
+                    id="normaliseWeights"
+                    type="checkbox"
+                    checked
+                >
+
+                <span>
+                    Normalise weights to total 1
+                </span>
+
+            </label>
+
+
+            <!-- Advanced settings -->
+
+            <details class="advanced-settings">
+
+                <summary>
+                    Advanced Settings
+                </summary>
+
+                <div class="advanced-content">
+
+                    <h3>
+                        Historical Comparison Window
+                    </h3>
+
+                    <div class="form-grid four-column-grid">
+
+                        <div class="field">
+                            <label for="windowDays">
+                                Window Days (+/-)
+                            </label>
+
+                            <input
+                                id="windowDays"
+                                type="number"
+                                value="3"
+                                min="0"
+                                max="49"
+                                step="1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="startHour">
+                                Start Hour
+                            </label>
+
+                            <input
+                                id="startHour"
+                                type="number"
+                                value="8"
+                                min="0"
+                                max="23"
+                                step="1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="endHour">
+                                End Hour
+                            </label>
+
+                            <input
+                                id="endHour"
+                                type="number"
+                                value="23"
+                                min="0"
+                                max="23"
+                                step="1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="minHoursRequired">
+                                Minimum Hours Required
+                            </label>
+
+                            <input
+                                id="minHoursRequired"
+                                type="number"
+                                value="12"
+                                min="1"
+                                max="24"
+                                step="1"
+                            >
+                        </div>
+
+                    </div>
+
+
+                    <h3>
+                        Probability Thresholds
+                    </h3>
+
+                    <div class="form-grid four-column-grid">
+
+                        <div class="field">
+                            <label for="dryMaxPrecipMm">
+                                Dry Max Precipitation (mm)
+                            </label>
+
+                            <input
+                                id="dryMaxPrecipMm"
+                                type="number"
+                                value="0.20"
+                                min="0"
+                                step="0.01"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="lowCloudMaxPct">
+                                Low Cloud Maximum (%)
+                            </label>
+
+                            <input
+                                id="lowCloudMaxPct"
+                                type="number"
+                                value="30"
+                                min="0"
+                                max="100"
+                                step="1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="halfCloudMaxPct">
+                                Half Cloud Maximum (%)
+                            </label>
+
+                            <input
+                                id="halfCloudMaxPct"
+                                type="number"
+                                value="50"
+                                min="0"
+                                max="100"
+                                step="1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="warmMinAvgTempC">
+                                Warm Minimum Average °C
+                            </label>
+
+                            <input
+                                id="warmMinAvgTempC"
+                                type="number"
+                                value="15"
+                                step="0.1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="reachesMinMaxTempC">
+                                Reaches Minimum Maximum °C
+                            </label>
+
+                            <input
+                                id="reachesMinMaxTempC"
+                                type="number"
+                                value="18"
+                                step="0.1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="goodMaxPrecipMm">
+                                Good Max Precipitation (mm)
+                            </label>
+
+                            <input
+                                id="goodMaxPrecipMm"
+                                type="number"
+                                value="0.20"
+                                min="0"
+                                step="0.01"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="goodMaxCloudPct">
+                                Good Maximum Cloud (%)
+                            </label>
+
+                            <input
+                                id="goodMaxCloudPct"
+                                type="number"
+                                value="40"
+                                min="0"
+                                max="100"
+                                step="1"
+                            >
+                        </div>
+
+                        <div class="field">
+                            <label for="goodMinAvgTempC">
+                                Good Minimum Average °C
+                            </label>
+
+                            <input
+                                id="goodMinAvgTempC"
+                                type="number"
+                                value="15"
+                                step="0.1"
+                            >
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </details>
+
+
+            <div class="actions">
+
+                <button id="rankButton" type="submit">
+                    Rank Weather Dates
+                </button>
+
+                <button
+                    id="refreshLocationsButton"
+                    type="button"
+                    class="secondary-button"
+                >
+                    Refresh Locations
+                </button>
+
+            </div>
+
+        </form>
+
+
+        <!-- Ranking results -->
+
+        <div id="rankingResults" class="results">
+
+            <div class="results-heading">
+
+                <h3 id="rankingResultsTitle">
+                    Ranked Dates
+                </h3>
+
+                <span
+                    id="rankingResultCount"
+                    class="result-count"
+                ></span>
+
+            </div>
+
+            <div class="table-wrap ranking-table-wrap">
+
+                <table class="ranking-table">
+
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Candidate Date</th>
+                            <th>Day</th>
+                            <th>Overall Score</th>
+
+                            <th>Dry %</th>
+                            <th>Completely Dry %</th>
+                            <th>Low Cloud %</th>
+                            <th>Half or Less Cloud %</th>
+                            <th>Warm %</th>
+                            <th>Reaches Max Temp %</th>
+                            <th>Good Weather %</th>
+
+                            <th>Expected Avg °C</th>
+                            <th>Expected Max °C</th>
+                            <th>Expected Min °C</th>
+
+                            <th>Expected Precipitation mm</th>
+                            <th>Expected Rain mm</th>
+                            <th>Expected Cloud %</th>
+                            <th>Expected Humidity %</th>
+
+                            <th>Average Wind mph</th>
+                            <th>Maximum Wind mph</th>
+                            <th>Maximum Gust mph</th>
+                            <th>Pressure hPa</th>
+
+                            <th>Historical Years</th>
+                            <th>Days Analysed</th>
+                            <th>Earliest History</th>
+                            <th>Latest History</th>
+                        </tr>
+                    </thead>
+
+                    <tbody id="rankingResultsBody"></tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+
+    </section>
+
+</main>
+
+
+<script>
+    /* =========================================================
+       SUPABASE
+       ========================================================= */
+
+    const SUPABASE_URL =
+        'https://goupppehmpuwpuitkuyb.supabase.co';
+
+    const SUPABASE_KEY =
+        'sb_publishable_0i8HhBH-kjYoHhCYCzKLrA_EPN9UJ_Q';
+
+    const { createClient } = supabase;
+
+    const supabaseClient = createClient(
+        SUPABASE_URL,
+        SUPABASE_KEY
+    );
+
+
+    /* =========================================================
+       SHARED HELPERS
+       ========================================================= */
+
+    function showToast(message, type = 'info') {
+        const container =
+            document.getElementById('toastContainer');
+
+        const toast =
+            document.createElement('div');
+
+        toast.className = `toast ${type}`;
+        toast.textContent = message;
+
+        container.appendChild(toast);
+
+        window.setTimeout(
+            () => toast.remove(),
+            6500
+        );
+    }
+
+
+    function getRequiredNumber(id, label) {
+        const input =
+            document.getElementById(id);
+
+        const raw =
+            input.value.trim();
+
+        const value =
+            Number(raw);
+
+        if (
+            raw === '' ||
+            !Number.isFinite(value)
+        ) {
+            throw new Error(
+                `${label} must be a valid number.`
+            );
+        }
+
+        return value;
+    }
+
+
+    function addCell(row, value, className = '') {
+        const cell =
+            document.createElement('td');
+
+        cell.textContent =
+            value === null ||
+            value === undefined
+                ? ''
+                : String(value);
+
+        if (className) {
+            cell.className = className;
+        }
+
+        row.appendChild(cell);
+    }
+
+
+    function getErrorMessage(error) {
+        if (!error) {
+            return 'An unexpected error occurred.';
+        }
+
+        const parts = [
+            error.message,
+            error.details,
+            error.hint
+        ].filter(Boolean);
+
+        return parts.length
+            ? parts.join(' ')
+            : 'An unexpected error occurred.';
+    }
+
+
+    /* =========================================================
+       RANKING LOCATION DROPDOWN
+       ========================================================= */
+
+    async function loadRankingLocations(
+        preferredLocation = null,
+        showSuccessToast = false
+    ) {
+        const select =
+            document.getElementById(
+                'rankLocationName'
+            );
+
+        const previousValue =
+            select.value;
+
+        try {
+            select.disabled = true;
+
+            select.innerHTML =
+                '<option value="">Loading locations...</option>';
+
+            const { data, error } =
+                await supabaseClient.rpc(
+                    'get_weather_locations'
+                );
+
+            if (error) {
+                throw error;
+            }
+
+            select.innerHTML =
+                '<option value="">Select location...</option>';
+
+            if (
+                !Array.isArray(data) ||
+                data.length === 0
+            ) {
+                select.innerHTML =
+                    '<option value="">No locations available</option>';
+
+                showToast(
+                    'No imported weather locations are available.',
+                    'info'
+                );
+
+                return;
+            }
+
+            data.forEach((row) => {
+                const locationName =
+                    String(
+                        row.location_name ?? ''
+                    ).trim();
+
+                if (!locationName) {
+                    return;
+                }
+
+                const option =
+                    document.createElement('option');
+
+                option.value = locationName;
+                option.textContent = locationName;
+
+                select.appendChild(option);
+            });
+
+            const availableValues =
+                Array.from(select.options)
+                    .map(option => option.value)
+                    .filter(Boolean);
+
+            if (
+                preferredLocation &&
+                availableValues.includes(
+                    preferredLocation
+                )
+            ) {
+                select.value =
+                    preferredLocation;
+            }
+            else if (
+                previousValue &&
+                availableValues.includes(
+                    previousValue
+                )
+            ) {
+                select.value =
+                    previousValue;
+            }
+            else if (
+                availableValues.includes('Troon')
+            ) {
+                select.value = 'Troon';
+            }
+            else if (
+                availableValues.length > 0
+            ) {
+                select.value =
+                    availableValues[0];
+            }
+
+            if (showSuccessToast) {
+                showToast(
+                    `${availableValues.length} location${
+                        availableValues.length === 1
+                            ? ''
+                            : 's'
+                    } loaded.`,
+                    'success'
+                );
+            }
+        }
+        catch (error) {
+            console.error(error);
+
+            select.innerHTML =
+                '<option value="">Unable to load locations</option>';
+
+            showToast(
+                getErrorMessage(error),
+                'error'
+            );
+        }
+        finally {
+            select.disabled = false;
+        }
+    }
+
+
+    document
+        .getElementById(
+            'refreshLocationsButton'
+        )
+        .addEventListener(
+            'click',
+            async () => {
+                await loadRankingLocations(
+                    null,
+                    true
+                );
+            }
+        );
+
+
+    /* =========================================================
+       WEATHER IMPORT
+       ========================================================= */
+
+    const weatherImportForm =
+        document.getElementById(
+            'weatherImportForm'
+        );
+
+    const importButton =
+        document.getElementById(
+            'importButton'
+        );
+
+    const importResults =
+        document.getElementById(
+            'importResults'
+        );
+
+    const importResultsBody =
+        document.getElementById(
+            'importResultsBody'
+        );
+
+    const importResultStatus =
+        document.getElementById(
+            'importResultStatus'
+        );
+
+
+    weatherImportForm.addEventListener(
+        'submit',
+        async (event) => {
+            event.preventDefault();
+
+            importResults.classList.remove(
+                'visible'
+            );
+
+            importResultsBody.innerHTML = '';
+            importResultStatus.textContent = '';
+
+            const locationName =
+                document
+                    .getElementById(
+                        'importLocationName'
+                    )
+                    .value
+                    .trim();
+
+            const latitude =
+                Number(
+                    document
+                        .getElementById(
+                            'latitude'
+                        )
+                        .value
+                );
+
+            const longitude =
+                Number(
+                    document
+                        .getElementById(
+                            'longitude'
+                        )
+                        .value
+                );
+
+            if (!locationName) {
+                showToast(
+                    'Location name is required.',
+                    'error'
+                );
+
+                return;
+            }
+
+            if (
+                !Number.isFinite(latitude) ||
+                latitude < -90 ||
+                latitude > 90
+            ) {
+                showToast(
+                    'Latitude must be between -90 and 90.',
+                    'error'
+                );
+
+                return;
+            }
+
+            if (
+                !Number.isFinite(longitude) ||
+                longitude < -180 ||
+                longitude > 180
+            ) {
+                showToast(
+                    'Longitude must be between -180 and 180.',
+                    'error'
+                );
+
+                return;
+            }
+
+            importButton.disabled = true;
+            importButton.textContent =
+                'Importing...';
+
+            showToast(
+                `Loading weather history for ${locationName}...`,
+                'info'
+            );
+
+            try {
+                const { data, error } =
+                    await supabaseClient.rpc(
+                        'load_weather_history',
+                        {
+                            p_location_name:
+                                locationName,
+
+                            p_latitude:
+                                latitude,
+
+                            p_longitude:
+                                longitude
+                        }
+                    );
+
+                if (error) {
+                    throw error;
+                }
+
+                if (
+                    !Array.isArray(data) ||
+                    data.length === 0
+                ) {
+                    throw new Error(
+                        'The import completed but returned no result.'
+                    );
+                }
+
+                data.forEach((result) => {
+                    const row =
+                        document.createElement('tr');
+
+                    addCell(
+                        row,
+                        result.rows_upserted
+                    );
+
+                    addCell(
+                        row,
+                        result.chunks_run
+                    );
+
+                    addCell(
+                        row,
+                        result.loaded_from
+                    );
+
+                    addCell(
+                        row,
+                        result.loaded_to
+                    );
+
+                    addCell(
+                        row,
+                        result.finished
+                            ? 'true'
+                            : 'false',
+
+                        result.finished
+                            ? 'status-true'
+                            : 'status-false'
+                    );
+
+                    importResultsBody.appendChild(
+                        row
+                    );
+                });
+
+                importResults.classList.add(
+                    'visible'
+                );
+
+                const result = data[0];
+
+                importResultStatus.textContent =
+                    result.finished
+                        ? 'Import is up to date'
+                        : 'Additional history remains';
+
+                /*
+                 * Refresh the separate ranking
+                 * location dropdown and select the
+                 * imported location.
+                 */
+
+                await loadRankingLocations(
+                    locationName
+                );
+
+                if (result.finished) {
+                    showToast(
+                        `Weather history for ${locationName} is fully up to date.`,
+                        'success'
+                    );
+                }
+                else {
+                    showToast(
+                        `Batch completed for ${locationName}. Run the import again to continue.`,
+                        'success'
+                    );
+                }
+            }
+            catch (error) {
+                console.error(error);
+
+                showToast(
+                    getErrorMessage(error),
+                    'error'
+                );
+            }
+            finally {
+                importButton.disabled = false;
+
+                importButton.textContent =
+                    'Import Weather History';
+            }
+        }
+    );
+
+
+    /* =========================================================
+       WEATHER DATE RANKING
+       ========================================================= */
+
+    const rankingForm =
+        document.getElementById(
+            'rankingForm'
+        );
+
+    const rankButton =
+        document.getElementById(
+            'rankButton'
+        );
+
+    const rankingResults =
+        document.getElementById(
+            'rankingResults'
+        );
+
+    const rankingResultsBody =
+        document.getElementById(
+            'rankingResultsBody'
+        );
+
+    const rankingResultCount =
+        document.getElementById(
+            'rankingResultCount'
+        );
+
+    const rankingResultsTitle =
+        document.getElementById(
+            'rankingResultsTitle'
+        );
+
+
+    rankingForm.addEventListener(
+        'submit',
+        async (event) => {
+            event.preventDefault();
+
+            rankingResults.classList.remove(
+                'visible'
+            );
+
+            rankingResultsBody.innerHTML = '';
+            rankingResultCount.textContent = '';
+
+            try {
+                /*
+                 * Separate ranking dropdown.
+                 */
+
+                const locationName =
+                    document
+                        .getElementById(
+                            'rankLocationName'
+                        )
+                        .value
+                        .trim();
+
+                if (!locationName) {
+                    throw new Error(
+                        'Select a location before ranking dates.'
+                    );
+                }
+
+                /*
+                 * Main parameters.
+                 */
+
+                const startDate =
+                    document
+                        .getElementById(
+                            'rankStartDate'
+                        )
+                        .value;
+
+                const endDate =
+                    document
+                        .getElementById(
+                            'rankEndDate'
+                        )
+                        .value;
+
+                const dayOfWeek =
+                    document
+                        .getElementById(
+                            'rankDayOfWeek'
+                        )
+                        .value;
+
+                const topNRaw =
+                    document
+                        .getElementById(
+                            'rankTopN'
+                        )
+                        .value
+                        .trim();
+
+                if (!startDate) {
+                    throw new Error(
+                        'Start date is required.'
+                    );
+                }
+
+                if (!endDate) {
+                    throw new Error(
+                        'End date is required.'
+                    );
+                }
+
+                if (endDate < startDate) {
+                    throw new Error(
+                        'End date cannot be before the start date.'
+                    );
+                }
+
+                const topN =
+                    topNRaw === ''
+                        ? null
+                        : Number(topNRaw);
+
+                if (
+                    topN !== null &&
+                    (
+                        !Number.isInteger(topN) ||
+                        topN < 1 ||
+                        topN > 500
+                    )
+                ) {
+                    throw new Error(
+                        'Number of results must be between 1 and 500.'
+                    );
+                }
+
+                /*
+                 * Advanced parameters.
+                 */
+
+                const windowDays =
+                    getRequiredNumber(
+                        'windowDays',
+                        'Window days'
+                    );
+
+                const startHour =
+                    getRequiredNumber(
+                        'startHour',
+                        'Start hour'
+                    );
+
+                const endHour =
+                    getRequiredNumber(
+                        'endHour',
+                        'End hour'
+                    );
+
+                const minHoursRequired =
+                    getRequiredNumber(
+                        'minHoursRequired',
+                        'Minimum hours required'
+                    );
+
+                if (
+                    !Number.isInteger(windowDays) ||
+                    windowDays < 0 ||
+                    windowDays > 49
+                ) {
+                    throw new Error(
+                        'Window days must be a whole number between 0 and 49.'
+                    );
+                }
+
+                if (
+                    !Number.isInteger(startHour) ||
+                    startHour < 0 ||
+                    startHour > 23
+                ) {
+                    throw new Error(
+                        'Start hour must be between 0 and 23.'
+                    );
+                }
+
+                if (
+                    !Number.isInteger(endHour) ||
+                    endHour < 0 ||
+                    endHour > 23
+                ) {
+                    throw new Error(
+                        'End hour must be between 0 and 23.'
+                    );
+                }
+
+                if (endHour < startHour) {
+                    throw new Error(
+                        'End hour cannot be before start hour.'
+                    );
+                }
+
+                if (
+                    !Number.isInteger(
+                        minHoursRequired
+                    ) ||
+                    minHoursRequired < 1 ||
+                    minHoursRequired > 24
+                ) {
+                    throw new Error(
+                        'Minimum hours required must be between 1 and 24.'
+                    );
+                }
+
+                /*
+                 * RPC parameters.
+                 */
+
+                const rpcParameters = {
+                    p_location_name:
+                        locationName,
+
+                    p_start_date:
+                        startDate,
+
+                    p_end_date:
+                        endDate,
+
+                    p_day_of_week:
+                        dayOfWeek === ''
+                            ? null
+                            : dayOfWeek,
+
+                    p_window_days:
+                        windowDays,
+
+                    p_start_hour:
+                        startHour,
+
+                    p_end_hour:
+                        endHour,
+
+                    p_min_hours_required:
+                        minHoursRequired,
+
+                    p_dry_max_precip_mm:
+                        getRequiredNumber(
+                            'dryMaxPrecipMm',
+                            'Dry maximum precipitation'
+                        ),
+
+                    p_low_cloud_max_pct:
+                        getRequiredNumber(
+                            'lowCloudMaxPct',
+                            'Low cloud maximum'
+                        ),
+
+                    p_half_cloud_max_pct:
+                        getRequiredNumber(
+                            'halfCloudMaxPct',
+                            'Half cloud maximum'
+                        ),
+
+                    p_warm_min_avg_temp_c:
+                        getRequiredNumber(
+                            'warmMinAvgTempC',
+                            'Warm minimum average temperature'
+                        ),
+
+                    p_reaches_min_max_temp_c:
+                        getRequiredNumber(
+                            'reachesMinMaxTempC',
+                            'Minimum maximum temperature'
+                        ),
+
+                    p_good_max_precip_mm:
+                        getRequiredNumber(
+                            'goodMaxPrecipMm',
+                            'Good-weather maximum precipitation'
+                        ),
+
+                    p_good_max_cloud_pct:
+                        getRequiredNumber(
+                            'goodMaxCloudPct',
+                            'Good-weather maximum cloud'
+                        ),
+
+                    p_good_min_avg_temp_c:
+                        getRequiredNumber(
+                            'goodMinAvgTempC',
+                            'Good-weather minimum average temperature'
+                        ),
+
+                    p_weight_dry:
+                        getRequiredNumber(
+                            'weightDry',
+                            'Dry weight'
+                        ),
+
+                    p_weight_low_cloud:
+                        getRequiredNumber(
+                            'weightLowCloud',
+                            'Low-cloud weight'
+                        ),
+
+                    p_weight_warm:
+                        getRequiredNumber(
+                            'weightWarm',
+                            'Warm weight'
+                        ),
+
+                    p_weight_good:
+                        getRequiredNumber(
+                            'weightGood',
+                            'Good-weather weight'
+                        ),
+
+                    p_normalise_weights:
+                        document
+                            .getElementById(
+                                'normaliseWeights'
+                            )
+                            .checked,
+
+                    p_top_n:
+                        topN
+                };
+
+                /*
+                 * Weight validation.
+                 */
+
+                const weights = [
+                    rpcParameters.p_weight_dry,
+                    rpcParameters.p_weight_low_cloud,
+                    rpcParameters.p_weight_warm,
+                    rpcParameters.p_weight_good
+                ];
+
+                if (
+                    weights.some(
+                        weight => weight < 0
+                    )
+                ) {
+                    throw new Error(
+                        'Score weights cannot be negative.'
+                    );
+                }
+
+                const weightTotal =
+                    weights.reduce(
+                        (total, weight) =>
+                            total + weight,
+                        0
+                    );
+
+                if (
+                    rpcParameters
+                        .p_normalise_weights &&
+                    weightTotal === 0
+                ) {
+                    throw new Error(
+                        'At least one score weight must be greater than zero.'
+                    );
+                }
+
+                /*
+                 * Cloud threshold validation.
+                 */
+
+                const cloudThresholds = [
+                    {
+                        name: 'Low cloud maximum',
+                        value:
+                            rpcParameters
+                                .p_low_cloud_max_pct
+                    },
+                    {
+                        name: 'Half cloud maximum',
+                        value:
+                            rpcParameters
+                                .p_half_cloud_max_pct
+                    },
+                    {
+                        name:
+                            'Good-weather maximum cloud',
+                        value:
+                            rpcParameters
+                                .p_good_max_cloud_pct
+                    }
+                ];
+
+                cloudThresholds.forEach(
+                    threshold => {
+                        if (
+                            threshold.value < 0 ||
+                            threshold.value > 100
+                        ) {
+                            throw new Error(
+                                `${threshold.name} must be between 0 and 100.`
+                            );
+                        }
+                    }
+                );
+
+                if (
+                    rpcParameters
+                        .p_dry_max_precip_mm < 0 ||
+                    rpcParameters
+                        .p_good_max_precip_mm < 0
+                ) {
+                    throw new Error(
+                        'Precipitation thresholds cannot be negative.'
+                    );
+                }
+
+                /*
+                 * Run ranking function.
+                 */
+
+                rankingResultsTitle.textContent =
+                    `Ranked Dates - ${locationName}`;
+
+                rankButton.disabled = true;
+                rankButton.textContent =
+                    'Ranking...';
+
+                showToast(
+                    `Ranking candidate dates for ${locationName}...`,
+                    'info'
+                );
+
+                const { data, error } =
+                    await supabaseClient.rpc(
+                        'rank_candidate_weather_dates',
+                        rpcParameters
+                    );
+
+                if (error) {
+                    throw error;
+                }
+
+                if (!Array.isArray(data)) {
+                    throw new Error(
+                        'The ranking function returned an unexpected response.'
+                    );
+                }
+
+                rankingResults.classList.add(
+                    'visible'
+                );
+
+                /*
+                 * No results.
+                 */
+
+                if (data.length === 0) {
+                    const row =
+                        document.createElement('tr');
+
+                    const cell =
+                        document.createElement('td');
+
+                    cell.colSpan = 26;
+                    cell.className =
+                        'empty-result';
+
+                    cell.textContent =
+                        `No candidate dates were returned for ${locationName}.`;
+
+                    row.appendChild(cell);
+
+                    rankingResultsBody.appendChild(
+                        row
+                    );
+
+                    rankingResultCount.textContent =
+                        'No matching dates';
+
+                    showToast(
+                        `No candidate dates were returned for ${locationName}.`,
+                        'info'
+                    );
+
+                    return;
+                }
+
+                /*
+                 * Render results.
+                 */
+
+                data.forEach((result) => {
+                    const row =
+                        document.createElement('tr');
+
+                    addCell(
+                        row,
+                        result.weather_rank,
+                        'rank-cell'
+                    );
+
+                    addCell(
+                        row,
+                        result.candidate_date
+                    );
+
+                    addCell(
+                        row,
+                        result.day_name
+                    );
+
+                    addCell(
+                        row,
+                        result.overall_weather_score,
+                        'score-cell'
+                    );
+
+                    addCell(
+                        row,
+                        result.dry_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.completely_dry_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.low_cloud_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.half_or_less_cloud_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.warm_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.reaches_max_temp_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.good_weather_probability_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_average_temperature_c
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_maximum_temperature_c
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_minimum_temperature_c
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_precipitation_mm
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_rain_mm
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_cloud_cover_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_relative_humidity_pct
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_average_wind_speed_mph
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_maximum_wind_speed_mph
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_maximum_wind_gust_mph
+                    );
+
+                    addCell(
+                        row,
+                        result.expected_pressure_msl_hpa
+                    );
+
+                    addCell(
+                        row,
+                        result.historical_years
+                    );
+
+                    addCell(
+                        row,
+                        result.historical_days_analysed
+                    );
+
+                    addCell(
+                        row,
+                        result.earliest_historical_date
+                    );
+
+                    addCell(
+                        row,
+                        result.latest_historical_date
+                    );
+
+                    rankingResultsBody.appendChild(
+                        row
+                    );
+                });
+
+                rankingResultCount.textContent =
+                    `${data.length} date${
+                        data.length === 1
+                            ? ''
+                            : 's'
+                    } returned`;
+
+                showToast(
+                    `${data.length} candidate date${
+                        data.length === 1
+                            ? ''
+                            : 's'
+                    } ranked for ${locationName}.`,
+                    'success'
+                );
+            }
+            catch (error) {
+                console.error(error);
+
+                showToast(
+                    getErrorMessage(error),
+                    'error'
+                );
+            }
+            finally {
+                rankButton.disabled = false;
+
+                rankButton.textContent =
+                    'Rank Weather Dates';
+            }
+        }
+    );
+
+
+    /* =========================================================
+       INITIAL PAGE LOAD
+       ========================================================= */
+
+    loadRankingLocations();
+</script>
+
+</body>
+</html>
