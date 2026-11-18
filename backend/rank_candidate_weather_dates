@@ -1,0 +1,255 @@
+CREATE OR REPLACE FUNCTION public.rank_candidate_weather_dates(p_location_name text, p_start_date date, p_end_date date, p_day_of_week text DEFAULT NULL::text, p_window_days integer DEFAULT 3, p_start_hour integer DEFAULT 8, p_end_hour integer DEFAULT 23, p_min_hours_required integer DEFAULT 12, p_dry_max_precip_mm numeric DEFAULT 0.20, p_low_cloud_max_pct numeric DEFAULT 30, p_half_cloud_max_pct numeric DEFAULT 50, p_warm_min_avg_temp_c numeric DEFAULT 15, p_reaches_min_max_temp_c numeric DEFAULT 18, p_good_max_precip_mm numeric DEFAULT 0.20, p_good_max_cloud_pct numeric DEFAULT 40, p_good_min_avg_temp_c numeric DEFAULT 15, p_weight_dry numeric DEFAULT 0.50, p_weight_low_cloud numeric DEFAULT 0.25, p_weight_warm numeric DEFAULT 0.00, p_weight_good numeric DEFAULT 0.10, p_normalise_weights boolean DEFAULT false, p_top_n integer DEFAULT NULL::integer)
+ RETURNS TABLE(weather_rank bigint, candidate_date date, day_name text, historical_years bigint, historical_days_analysed bigint, earliest_historical_date date, latest_historical_date date, expected_average_temperature_c numeric, expected_maximum_temperature_c numeric, expected_minimum_temperature_c numeric, expected_precipitation_mm numeric, expected_rain_mm numeric, expected_cloud_cover_pct numeric, expected_relative_humidity_pct numeric, expected_average_wind_speed_mph numeric, expected_maximum_wind_speed_mph numeric, expected_maximum_wind_gust_mph numeric, expected_pressure_msl_hpa numeric, dry_probability_pct numeric, completely_dry_probability_pct numeric, low_cloud_probability_pct numeric, half_or_less_cloud_probability_pct numeric, warm_probability_pct numeric, reaches_max_temp_probability_pct numeric, good_weather_probability_pct numeric, overall_weather_score numeric)
+ LANGUAGE plpgsql
+ STABLE
+ SET search_path TO 'public'
+AS $function$
+#variable_conflict use_column
+DECLARE
+    v_dow           integer;    -- 1 = Monday ... 7 = Sunday (ISO)
+    v_weight_sum    numeric;
+    v_w_dry         numeric := p_weight_dry;
+    v_w_low_cloud   numeric := p_weight_low_cloud;
+    v_w_warm        numeric := p_weight_warm;
+    v_w_good        numeric := p_weight_good;
+BEGIN
+    ------------------------------------------------------------
+    -- Validation and derived values
+    ------------------------------------------------------------
+    IF p_start_date IS NULL OR p_end_date IS NULL OR p_end_date < p_start_date THEN
+        RAISE EXCEPTION 'p_start_date and p_end_date must be supplied and p_end_date must not be before p_start_date.';
+    END IF;
+
+    IF p_window_days < 0
+       OR p_start_hour NOT BETWEEN 0 AND 23
+       OR p_end_hour   NOT BETWEEN 0 AND 23
+       OR p_start_hour > p_end_hour THEN
+        RAISE EXCEPTION 'Invalid p_window_days or hour range.';
+    END IF;
+
+    v_dow := CASE upper(left(btrim(p_day_of_week), 3))
+                 WHEN 'MON' THEN 1 WHEN 'TUE' THEN 2 WHEN 'WED' THEN 3
+                 WHEN 'THU' THEN 4 WHEN 'FRI' THEN 5 WHEN 'SAT' THEN 6
+                 WHEN 'SUN' THEN 7
+             END;
+
+    IF p_day_of_week IS NOT NULL AND v_dow IS NULL THEN
+        RAISE EXCEPTION 'p_day_of_week not recognised. Use e.g. Sunday, Mon, Tue.';
+    END IF;
+
+    IF p_normalise_weights THEN
+        v_weight_sum := v_w_dry + v_w_low_cloud + v_w_warm + v_w_good;
+
+        IF v_weight_sum = 0 THEN
+            RAISE EXCEPTION 'Weights sum to zero; cannot normalise.';
+        END IF;
+
+        v_w_dry       := v_w_dry       / v_weight_sum;
+        v_w_low_cloud := v_w_low_cloud / v_weight_sum;
+        v_w_warm      := v_w_warm      / v_weight_sum;
+        v_w_good      := v_w_good      / v_weight_sum;
+    END IF;
+
+    ------------------------------------------------------------
+    -- Query
+    ------------------------------------------------------------
+    RETURN QUERY
+    WITH candidate_dates AS    -- every date in the range that falls on the chosen weekday
+    (
+        SELECT g.d::date AS candidate_date
+        FROM generate_series(p_start_date::timestamp, p_end_date::timestamp, interval '1 day') AS g(d)
+        WHERE v_dow IS NULL
+           OR extract(isodow FROM g.d)::integer = v_dow
+    ),
+
+    candidate_window_days AS   -- each candidate -> its +/- window of month/days (leap-year 2000 anchor)
+    (
+        SELECT
+            cd.candidate_date,
+            o.window_day_offset,
+            make_date(
+                2000,
+                extract(month FROM (cd.candidate_date + o.window_day_offset))::integer,
+                extract(day   FROM (cd.candidate_date + o.window_day_offset))::integer
+            ) AS comparison_date
+        FROM candidate_dates cd
+        CROSS JOIN generate_series(-p_window_days, p_window_days) AS o(window_day_offset)
+    ),
+
+    needed_days AS
+    (
+        SELECT DISTINCT comparison_date FROM candidate_window_days
+    ),
+
+    historical_daily_weather AS
+    (
+        SELECT
+            h.weather_date,
+            h.weather_year,
+            h.comparison_date,
+
+            count(h.temperature_2m_c)       AS temperature_hour_count,
+            count(h.cloud_cover_pct)        AS cloud_hour_count,
+            count(h.precipitation_mm)       AS precipitation_hour_count,
+
+            avg(h.temperature_2m_c)         AS average_temperature_c,
+            max(h.temperature_2m_c)         AS maximum_temperature_c,
+            min(h.temperature_2m_c)         AS minimum_temperature_c,
+            sum(h.precipitation_mm)         AS precipitation_mm,
+            sum(h.rain_mm)                  AS rain_mm,
+            avg(h.cloud_cover_pct)          AS average_cloud_cover_pct,
+            avg(h.relative_humidity_2m)     AS average_relative_humidity_pct,
+            avg(h.wind_speed_10m_mph)       AS average_wind_speed_mph,
+            max(h.wind_speed_10m_mph)       AS maximum_wind_speed_mph,
+            max(h.wind_gusts_10m_mph)       AS maximum_wind_gust_mph,
+            avg(h.pressure_msl_hpa)         AS average_pressure_msl_hpa
+        FROM
+        (
+            SELECT
+                w.weather_datetime::date                                        AS weather_date,
+                extract(year FROM w.weather_datetime)::integer                  AS weather_year,
+                make_date(
+                    2000,
+                    extract(month FROM w.weather_datetime)::integer,
+                    extract(day   FROM w.weather_datetime)::integer
+                )                                                               AS comparison_date,
+                w.temperature_2m_c,
+                w.cloud_cover_pct,
+                w.precipitation_mm,
+                w.rain_mm,
+                w.relative_humidity_2m,
+                w.wind_speed_10m_mph,
+                w.wind_gusts_10m_mph,
+                w.pressure_msl_hpa
+            FROM weather_hourly w
+            WHERE  w.location_name = p_location_name AND extract(hour FROM w.weather_datetime) BETWEEN p_start_hour AND p_end_hour
+        ) h
+        INNER JOIN needed_days nd
+            ON nd.comparison_date = h.comparison_date
+        GROUP BY h.weather_date, h.weather_year, h.comparison_date
+        HAVING count(h.temperature_2m_c)  >= p_min_hours_required
+           AND count(h.cloud_cover_pct)   >= p_min_hours_required
+           AND count(h.precipitation_mm)  >= p_min_hours_required
+    ),
+
+    candidate_historical_windows AS
+    (
+        SELECT
+            cw.candidate_date,
+            cw.window_day_offset,
+            hdw.*
+        FROM candidate_window_days cw
+        INNER JOIN historical_daily_weather hdw
+            ON hdw.comparison_date = cw.comparison_date
+    ),
+
+    historical_probabilities AS
+    (
+        SELECT
+            chw.candidate_date,
+
+            count(DISTINCT chw.weather_year)    AS historical_years,
+            count(*)                            AS historical_days_analysed,
+            min(chw.weather_date)               AS earliest_historical_date,
+            max(chw.weather_date)               AS latest_historical_date,
+
+            avg(chw.average_temperature_c)          AS expected_average_temperature_c,
+            avg(chw.maximum_temperature_c)          AS expected_maximum_temperature_c,
+            avg(chw.minimum_temperature_c)          AS expected_minimum_temperature_c,
+            avg(chw.precipitation_mm)               AS expected_precipitation_mm,
+            avg(chw.rain_mm)                        AS expected_rain_mm,
+            avg(chw.average_cloud_cover_pct)        AS expected_cloud_cover_pct,
+            avg(chw.average_relative_humidity_pct)  AS expected_relative_humidity_pct,
+            avg(chw.average_wind_speed_mph)         AS expected_average_wind_speed_mph,
+            avg(chw.maximum_wind_speed_mph)         AS expected_maximum_wind_speed_mph,
+            avg(chw.maximum_wind_gust_mph)          AS expected_maximum_wind_gust_mph,
+            avg(chw.average_pressure_msl_hpa)       AS expected_pressure_msl_hpa,
+
+            100.0 * avg(CASE WHEN chw.precipitation_mm <= p_dry_max_precip_mm THEN 1.0 ELSE 0.0 END)
+                AS dry_probability_pct,
+            100.0 * avg(CASE WHEN chw.precipitation_mm = 0 THEN 1.0 ELSE 0.0 END)
+                AS completely_dry_probability_pct,
+            100.0 * avg(CASE WHEN chw.average_cloud_cover_pct <= p_low_cloud_max_pct THEN 1.0 ELSE 0.0 END)
+                AS low_cloud_probability_pct,
+            100.0 * avg(CASE WHEN chw.average_cloud_cover_pct <= p_half_cloud_max_pct THEN 1.0 ELSE 0.0 END)
+                AS half_or_less_cloud_probability_pct,
+            100.0 * avg(CASE WHEN chw.average_temperature_c >= p_warm_min_avg_temp_c THEN 1.0 ELSE 0.0 END)
+                AS warm_probability_pct,
+            100.0 * avg(CASE WHEN chw.maximum_temperature_c >= p_reaches_min_max_temp_c THEN 1.0 ELSE 0.0 END)
+                AS reaches_max_temp_probability_pct,
+            100.0 * avg(CASE WHEN chw.precipitation_mm <= p_good_max_precip_mm
+                              AND chw.average_cloud_cover_pct <= p_good_max_cloud_pct
+                              AND chw.average_temperature_c >= p_good_min_avg_temp_c
+                             THEN 1.0 ELSE 0.0 END)
+                AS good_weather_probability_pct
+
+        FROM candidate_historical_windows chw
+        GROUP BY chw.candidate_date
+    ),
+
+    scored_dates AS
+    (
+        SELECT
+            hp.*,
+            (
+                  hp.dry_probability_pct          * v_w_dry
+                + hp.low_cloud_probability_pct    * v_w_low_cloud
+                + hp.warm_probability_pct         * v_w_warm
+                + hp.good_weather_probability_pct * v_w_good
+            )::numeric(10,2) AS overall_weather_score
+        FROM historical_probabilities hp
+    ),
+
+    ranked_dates AS
+    (
+        SELECT
+            row_number() OVER
+            (
+                ORDER BY
+                    sd.overall_weather_score DESC,
+                    sd.dry_probability_pct DESC,
+                    sd.expected_precipitation_mm ASC,
+                    sd.expected_cloud_cover_pct ASC,
+                    sd.expected_maximum_temperature_c DESC
+            ) AS weather_rank,
+            sd.*
+        FROM scored_dates sd
+    )
+
+    SELECT
+        rd.weather_rank,
+        rd.candidate_date,
+        (ARRAY['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'])
+            [extract(isodow FROM rd.candidate_date)::integer]   AS day_name,
+
+        rd.historical_years,
+        rd.historical_days_analysed,
+        rd.earliest_historical_date,
+        rd.latest_historical_date,
+
+        rd.expected_average_temperature_c::numeric(6,2),
+        rd.expected_maximum_temperature_c::numeric(6,2),
+        rd.expected_minimum_temperature_c::numeric(6,2),
+        rd.expected_precipitation_mm::numeric(8,2),
+        rd.expected_rain_mm::numeric(8,2),
+        rd.expected_cloud_cover_pct::numeric(6,2),
+        rd.expected_relative_humidity_pct::numeric(6,2),
+        rd.expected_average_wind_speed_mph::numeric(7,2),
+        rd.expected_maximum_wind_speed_mph::numeric(7,2),
+        rd.expected_maximum_wind_gust_mph::numeric(7,2),
+        rd.expected_pressure_msl_hpa::numeric(8,2),
+
+        rd.dry_probability_pct::numeric(6,2),
+        rd.completely_dry_probability_pct::numeric(6,2),
+        rd.low_cloud_probability_pct::numeric(6,2),
+        rd.half_or_less_cloud_probability_pct::numeric(6,2),
+        rd.warm_probability_pct::numeric(6,2),
+        rd.reaches_max_temp_probability_pct::numeric(6,2),
+        rd.good_weather_probability_pct::numeric(6,2),
+
+        rd.overall_weather_score
+    FROM ranked_dates rd
+    WHERE rd.weather_rank <= COALESCE(p_top_n, 2147483647)
+    ORDER BY rd.weather_rank;
+END;
+$function$
