@@ -1,0 +1,491 @@
+CREATE PROCEDURE dbo.RankCandidateWeatherDates
+    -- Which dates to consider
+    @StartDate          DATE,
+    @EndDate            DATE,
+    @DayOfWeek          NVARCHAR(10)  = NULL,   -- Monday..Sunday (or Mon..Sun). NULL = every day in range
+
+    -- Historical comparison window
+    @WindowDays         INT           = 3,      -- +/- days either side of each candidate date (max 49)
+    @StartHour          INT           = 8,      -- first hour of the day included
+    @EndHour            INT           = 23,     -- last hour of the day included
+    @MinHoursRequired   INT           = 12,     -- min valid hourly readings for a day to count
+
+    -- Thresholds that define each probability
+    @DryMaxPrecipMm     DECIMAL(9,4)  = 0.20,
+    @LowCloudMaxPct     DECIMAL(9,4)  = 30,
+    @HalfCloudMaxPct    DECIMAL(9,4)  = 50,
+    @WarmMinAvgTempC    DECIMAL(9,4)  = 15,
+    @ReachesMinMaxTempC DECIMAL(9,4)  = 18,
+    @GoodMaxPrecipMm    DECIMAL(9,4)  = 0.20,
+    @GoodMaxCloudPct    DECIMAL(9,4)  = 40,
+    @GoodMinAvgTempC    DECIMAL(9,4)  = 15,
+
+    -- Score weights (defaults match the original query; they sum to 0.85)
+    @WeightDry          DECIMAL(9,4)  = 0.50,
+    @WeightLowCloud     DECIMAL(9,4)  = 0.25,
+    @WeightWarm         DECIMAL(9,4)  = 0.00,
+    @WeightGood         DECIMAL(9,4)  = 0.10,
+    @NormaliseWeights   BIT           = 0,      -- 1 = rescale weights to sum to 1
+
+    @TopN               INT           = NULL    -- NULL = show every candidate date
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @DayNum     INT;             -- 0 = Monday ... 6 = Sunday
+    DECLARE @WeightSum  DECIMAL(18,6);
+    DECLARE @FirstMonth INT;             -- first / last calendar month of history worth reading
+    DECLARE @LastMonth  INT;
+    DECLARE @Stride     INT;             -- 7 when a weekday is chosen, otherwise 1
+    DECLARE @FirstDate  DATE;            -- first matching date on/after @StartDate
+    DECLARE @AllMonths  BIT;             -- 1 = range is so wide that every month is needed
+
+    SET @FirstMonth = MONTH(DATEADD(DAY, -@WindowDays, @StartDate));
+    SET @LastMonth  = MONTH(DATEADD(DAY,  @WindowDays, @EndDate));
+    SET @AllMonths  = CASE WHEN DATEDIFF(DAY, @StartDate, @EndDate) + 2 * @WindowDays >= 365 THEN 1 ELSE 0 END;
+
+    SET @DayNum = CASE UPPER(LEFT(LTRIM(@DayOfWeek), 3))
+                      WHEN 'MON' THEN 0 WHEN 'TUE' THEN 1 WHEN 'WED' THEN 2
+                      WHEN 'THU' THEN 3 WHEN 'FRI' THEN 4 WHEN 'SAT' THEN 5
+                      WHEN 'SUN' THEN 6
+                  END;   -- 1900-01-01 was a Monday, so this ignores DATEFIRST / language
+
+    SET @Stride     = CASE WHEN @DayNum IS NULL THEN 1 ELSE 7 END;
+    SET @FirstDate  = DATEADD(DAY,
+                              CASE WHEN @DayNum IS NULL THEN 0
+                                   ELSE (@DayNum - (DATEDIFF(DAY, CAST('19000101' AS DATE), @StartDate) % 7) + 7) % 7
+                              END,
+                              @StartDate);
+
+    SET @WeightSum = @WeightDry + @WeightLowCloud + @WeightWarm + @WeightGood;
+
+    IF @NormaliseWeights = 1 AND @WeightSum <> 0
+    BEGIN
+        SET @WeightDry      = @WeightDry      / @WeightSum;
+        SET @WeightLowCloud = @WeightLowCloud / @WeightSum;
+        SET @WeightWarm     = @WeightWarm     / @WeightSum;
+        SET @WeightGood     = @WeightGood     / @WeightSum;
+    END;
+
+    /* ============================================================
+       QUERY
+       ============================================================ */
+
+    WITH Digits AS
+    (
+        SELECT n FROM (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)) v(n)
+    ),
+
+    CandidateSundays AS   -- matching dates in the range (max 100 candidates per run)
+    (
+        SELECT DATEADD(DAY, k.n * @Stride, @FirstDate) AS candidate_date
+        FROM
+        (
+            SELECT a.n + 10 * b.n AS n
+            FROM Digits a
+            CROSS JOIN Digits b
+        ) k
+        WHERE DATEADD(DAY, k.n * @Stride, @FirstDate) <= @EndDate
+    ),
+
+    HistoricalDailyWeather AS
+    (
+        SELECT
+            CAST(weather_datetime AS DATE) AS weather_date,
+            YEAR(weather_datetime) AS weather_year,
+            MONTH(weather_datetime) AS weather_month,
+            DAY(weather_datetime) AS weather_day,
+
+            -- Leap-year anchor permits all valid month/day combinations.
+            DATEFROMPARTS
+            (
+                2000,
+                MONTH(weather_datetime),
+                DAY(weather_datetime)
+            ) AS comparison_date,
+
+            COUNT(*) AS available_hour_count,
+            COUNT(temperature_2m_c) AS temperature_hour_count,
+            COUNT(cloud_cover_pct) AS cloud_hour_count,
+            COUNT(precipitation_mm) AS precipitation_hour_count,
+
+            AVG
+            (
+                CAST(temperature_2m_c AS DECIMAL(18,4))
+            ) AS average_temperature_c,
+
+            MAX
+            (
+                CAST(temperature_2m_c AS DECIMAL(18,4))
+            ) AS maximum_temperature_c,
+
+            MIN
+            (
+                CAST(temperature_2m_c AS DECIMAL(18,4))
+            ) AS minimum_temperature_c,
+
+            SUM
+            (
+                CAST(precipitation_mm AS DECIMAL(18,4))
+            ) AS precipitation_mm,
+
+            SUM
+            (
+                CAST(rain_mm AS DECIMAL(18,4))
+            ) AS rain_mm,
+
+            AVG
+            (
+                CAST(cloud_cover_pct AS DECIMAL(18,4))
+            ) AS average_cloud_cover_pct,
+
+            AVG
+            (
+                CAST(relative_humidity_2m AS DECIMAL(18,4))
+            ) AS average_relative_humidity_pct,
+
+            AVG
+            (
+                CAST(wind_speed_10m_mph AS DECIMAL(18,4))
+            ) AS average_wind_speed_mph,
+
+            MAX
+            (
+                CAST(wind_speed_10m_mph AS DECIMAL(18,4))
+            ) AS maximum_wind_speed_mph,
+
+            MAX
+            (
+                CAST(wind_gusts_10m_mph AS DECIMAL(18,4))
+            ) AS maximum_wind_gust_mph,
+
+            AVG
+            (
+                CAST(pressure_msl_hpa AS DECIMAL(18,4))
+            ) AS average_pressure_msl_hpa
+
+        FROM dbo.weather_hourly
+
+        WHERE
+            DATEPART(HOUR, weather_datetime) BETWEEN @StartHour AND @EndHour
+
+            -- Only read the months that can fall inside a candidate window.
+            AND
+            (
+                   @AllMonths = 1
+                OR (@FirstMonth <= @LastMonth
+                    AND MONTH(weather_datetime) BETWEEN @FirstMonth AND @LastMonth)
+                OR (@FirstMonth >  @LastMonth
+                    AND (MONTH(weather_datetime) >= @FirstMonth OR MONTH(weather_datetime) <= @LastMonth))
+            )
+
+        GROUP BY
+            CAST(weather_datetime AS DATE),
+            YEAR(weather_datetime),
+            MONTH(weather_datetime),
+            DAY(weather_datetime)
+    ),
+
+    ValidHistoricalDailyWeather AS
+    (
+        SELECT
+            *
+        FROM HistoricalDailyWeather
+        WHERE
+            temperature_hour_count >= @MinHoursRequired
+            AND cloud_hour_count >= @MinHoursRequired
+            AND precipitation_hour_count >= @MinHoursRequired
+    ),
+
+    CandidateWindowDays AS   -- each candidate date -> its +/- @WindowDays month/days (2000 anchor)
+    (
+        SELECT
+            cs.candidate_date,
+            o.window_day_offset,
+            DATEFROMPARTS
+            (
+                2000,
+                MONTH(DATEADD(DAY, o.window_day_offset, cs.candidate_date)),
+                DAY(DATEADD(DAY, o.window_day_offset, cs.candidate_date))
+            ) AS comparison_date
+        FROM CandidateSundays cs
+        CROSS JOIN
+        (
+            SELECT a.n + 10 * b.n - 49 AS window_day_offset      -- -49 .. +50
+            FROM Digits a
+            CROSS JOIN Digits b
+            WHERE ABS(a.n + 10 * b.n - 49) <= @WindowDays
+        ) o
+    ),
+
+    CandidateHistoricalWindows AS
+    (
+        SELECT
+            cw.candidate_date,
+            cw.window_day_offset,
+            hdw.*
+        FROM CandidateWindowDays cw
+        INNER JOIN ValidHistoricalDailyWeather hdw
+            ON hdw.comparison_date = cw.comparison_date
+    ),
+
+    HistoricalProbabilities AS
+    (
+        SELECT
+            candidate_date,
+
+            COUNT(DISTINCT weather_year) AS historical_years,
+            COUNT(*) AS historical_days_analysed,
+
+            MIN(weather_date) AS earliest_historical_date,
+            MAX(weather_date) AS latest_historical_date,
+
+            AVG(average_temperature_c)
+                AS expected_average_temperature_c,
+
+            AVG(maximum_temperature_c)
+                AS expected_maximum_temperature_c,
+
+            AVG(minimum_temperature_c)
+                AS expected_minimum_temperature_c,
+
+            AVG(precipitation_mm)
+                AS expected_precipitation_mm,
+
+            AVG(rain_mm)
+                AS expected_rain_mm,
+
+            AVG(average_cloud_cover_pct)
+                AS expected_cloud_cover_pct,
+
+            AVG(average_relative_humidity_pct)
+                AS expected_relative_humidity_pct,
+
+            AVG(average_wind_speed_mph)
+                AS expected_average_wind_speed_mph,
+
+            AVG(maximum_wind_speed_mph)
+                AS expected_maximum_wind_speed_mph,
+
+            AVG(maximum_wind_gust_mph)
+                AS expected_maximum_wind_gust_mph,
+
+            AVG(average_pressure_msl_hpa)
+                AS expected_pressure_msl_hpa,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN precipitation_mm <= @DryMaxPrecipMm
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS dry_probability_pct,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN precipitation_mm = 0
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS completely_dry_probability_pct,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN average_cloud_cover_pct <= @LowCloudMaxPct
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS low_cloud_probability_pct,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN average_cloud_cover_pct <= @HalfCloudMaxPct
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS half_or_less_cloud_probability_pct,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN average_temperature_c >= @WarmMinAvgTempC
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS warm_probability_pct,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN maximum_temperature_c >= @ReachesMinMaxTempC
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS reaches_max_temp_probability_pct,
+
+            100.0 * AVG
+            (
+                CASE
+                    WHEN precipitation_mm <= @GoodMaxPrecipMm
+                     AND average_cloud_cover_pct <= @GoodMaxCloudPct
+                     AND average_temperature_c >= @GoodMinAvgTempC
+                        THEN 1.0
+                    ELSE 0.0
+                END
+            ) AS good_weather_probability_pct
+
+        FROM CandidateHistoricalWindows
+
+        GROUP BY
+            candidate_date
+    ),
+
+    ScoredDates AS
+    (
+        SELECT
+            *,
+
+            CAST
+            (
+                  dry_probability_pct * @WeightDry
+                + low_cloud_probability_pct * @WeightLowCloud
+                + warm_probability_pct * @WeightWarm
+                + good_weather_probability_pct * @WeightGood
+                AS DECIMAL(10,2)
+            ) AS overall_weather_score
+
+        FROM HistoricalProbabilities
+    ),
+
+    RankedDates AS
+    (
+        SELECT
+            ROW_NUMBER() OVER
+            (
+                ORDER BY
+                    overall_weather_score DESC,
+                    dry_probability_pct DESC,
+                    expected_precipitation_mm ASC,
+                    expected_cloud_cover_pct ASC,
+                    expected_maximum_temperature_c DESC
+            ) AS weather_rank,
+
+            *
+        FROM ScoredDates
+    )
+
+    SELECT
+        weather_rank,
+        candidate_date,
+        DATENAME(WEEKDAY, candidate_date) AS day_name,
+
+        historical_years,
+        historical_days_analysed,
+        earliest_historical_date,
+        latest_historical_date,
+
+        CAST
+        (
+            expected_average_temperature_c AS DECIMAL(6,2)
+        ) AS expected_average_temperature_c,
+
+        CAST
+        (
+            expected_maximum_temperature_c AS DECIMAL(6,2)
+        ) AS expected_maximum_temperature_c,
+
+        CAST
+        (
+            expected_minimum_temperature_c AS DECIMAL(6,2)
+        ) AS expected_minimum_temperature_c,
+
+        CAST
+        (
+            expected_precipitation_mm AS DECIMAL(8,2)
+        ) AS expected_precipitation_mm,
+
+        CAST
+        (
+            expected_rain_mm AS DECIMAL(8,2)
+        ) AS expected_rain_mm,
+
+        CAST
+        (
+            expected_cloud_cover_pct AS DECIMAL(6,2)
+        ) AS expected_cloud_cover_pct,
+
+        CAST
+        (
+            expected_relative_humidity_pct AS DECIMAL(6,2)
+        ) AS expected_relative_humidity_pct,
+
+        CAST
+        (
+            expected_average_wind_speed_mph AS DECIMAL(7,2)
+        ) AS expected_average_wind_speed_mph,
+
+        CAST
+        (
+            expected_maximum_wind_speed_mph AS DECIMAL(7,2)
+        ) AS expected_maximum_wind_speed_mph,
+
+        CAST
+        (
+            expected_maximum_wind_gust_mph AS DECIMAL(7,2)
+        ) AS expected_maximum_wind_gust_mph,
+
+        CAST
+        (
+            expected_pressure_msl_hpa AS DECIMAL(8,2)
+        ) AS expected_pressure_msl_hpa,
+
+        CAST
+        (
+            dry_probability_pct AS DECIMAL(6,2)
+        ) AS dry_probability_pct,
+
+        CAST
+        (
+            completely_dry_probability_pct AS DECIMAL(6,2)
+        ) AS completely_dry_probability_pct,
+
+        CAST
+        (
+            low_cloud_probability_pct AS DECIMAL(6,2)
+        ) AS low_cloud_probability_pct,
+
+        CAST
+        (
+            half_or_less_cloud_probability_pct AS DECIMAL(6,2)
+        ) AS half_or_less_cloud_probability_pct,
+
+        CAST
+        (
+            warm_probability_pct AS DECIMAL(6,2)
+        ) AS warm_probability_pct,
+
+        CAST
+        (
+            reaches_max_temp_probability_pct AS DECIMAL(6,2)
+        ) AS reaches_max_temp_probability_pct,
+
+        CAST
+        (
+            good_weather_probability_pct AS DECIMAL(6,2)
+        ) AS good_weather_probability_pct,
+
+        overall_weather_score
+
+    FROM RankedDates
+
+    WHERE
+        weather_rank <= ISNULL(@TopN, 2147483647)
+
+    ORDER BY
+        weather_rank;
+END;
+GO
